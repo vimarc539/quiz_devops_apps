@@ -1,0 +1,57 @@
+[
+    {
+      "id": 1,
+      "question": "What does DevOps stand for?",
+      "options": [
+        "Development Operations",
+        "Developer Options",
+        "Device Operating System",
+        "Digital Operations"
+      ],
+      "correctAnswer": 0
+    },
+    {
+      "id": 2,
+      "question": "Which tool is used for containerization?",
+      "options": [
+        "Jenkins",
+        "Docker",
+        "Git",
+        "Kubernetes"
+      ],
+      "correctAnswer": 1
+    },
+    {
+      "id": 3,
+      "question": "What is CI/CD?",
+      "options": [
+        "Continuous Integration/Continuous Deployment",
+        "Code Integration/Code Deployment",
+        "Container Integration/Container Development",
+        "Central Integration/Central Deployment"
+      ],
+      "correctAnswer": 0
+    },
+    {
+      "id": 4,
+      "question": "What is Kubernetes used for?",
+      "options": [
+        "Version control",
+        "Container orchestration",
+        "Code testing",
+        "Database management"
+      ],
+      "correctAnswer": 1
+    },
+    {
+      "id": 5,
+      "question": "What does API stand for?",
+      "options": [
+        "Application Programming Interface",
+        "Advanced Programming Integration",
+        "Automated Program Interaction",
+        "Application Process Integration"
+      ],
+      "correctAnswer": 0
+    }
+  ]
