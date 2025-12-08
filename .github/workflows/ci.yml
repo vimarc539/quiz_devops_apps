@@ -49,7 +49,7 @@ jobs:
         docker stop test-container
         docker rm test-container
 
-notify:
+  notify:
     needs: build-and-test
     runs-on: ubuntu-latest
     if: always()
