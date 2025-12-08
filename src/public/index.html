@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Quiz App</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: system-ui, -apple-system, sans-serif;
+    }
+    body {
+      margin: 0 auto;
+      max-width: 960px;
+      padding: 24px;
+      line-height: 1.5;
+    }
+    h1, h2 {
+      margin-bottom: 8px;
+    }
+    .card {
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 16px;
+      background: rgba(255,255,255,0.04);
+    }
+    button {
+      cursor: pointer;
+      padding: 8px 12px;
+      border-radius: 6px;
+      border: 1px solid #888;
+      background: #2d7ef7;
+      color: #fff;
+      font-weight: 600;
+    }
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .flex {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    ul {
+      padding-left: 20px;
+    }
+    .options label {
+      display: block;
+      margin: 6px 0;
+    }
+    code {
+      background: rgba(0,0,0,0.08);
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+    .status {
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <h1>Quiz API Playground</h1>
+  <p>Use this minimal frontend to try the API without looking at raw JSON.</p>
+
+  <div class="card">
+    <h2>Endpoints</h2>
+    <ul>
+      <li><a href="/api/quiz/questions" target="_blank">GET /api/quiz/questions</a></li>
+      <li><a href="/api/quiz/questions/1" target="_blank">GET /api/quiz/questions/:id</a></li>
+      <li><code>POST /api/quiz/submit</code> — submit one answer</li>
+      <li><code>POST /api/quiz/submit-all</code> — submit all answers</li>
+      <li><a href="/api/quiz/health" target="_blank">GET /api/quiz/health</a></li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <div class="flex">
+      <h2 style="margin:0;">Questions</h2>
+      <button id="loadQuestions">Load questions</button>
+      <span class="status" id="status"></span>
+    </div>
+    <div id="questions"></div>
+  </div>
+
+  <div class="card">
+    <h2>Submit a Single Answer</h2>
+    <form id="singleForm">
+      <label>
+        Question ID:
+        <input type="number" id="singleQuestionId" min="1" required />
+      </label>
+      <label>
+        Answer (option index):
+        <input type="number" id="singleAnswer" min="0" required />
+      </label>
+      <button type="submit">Submit</button>
+    </form>
+    <pre id="singleResult"></pre>
+  </div>
+
+  <div class="card">
+    <h2>Submit All Answers</h2>
+    <p>After loading questions, pick an option for each and calculate your score.</p>
+    <div id="bulkForm"></div>
+    <button id="submitAll" disabled>Submit all answers</button>
+    <pre id="bulkResult"></pre>
+  </div>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    const questionsEl = document.getElementById('questions');
+    const bulkFormEl = document.getElementById('bulkForm');
+    const submitAllBtn = document.getElementById('submitAll');
+    let cachedQuestions = [];
+
+    function setStatus(msg) {
+      statusEl.textContent = msg || '';
+    }
+
+    async function loadQuestions() {
+      setStatus('Loading...');
+      questionsEl.innerHTML = '';
+      bulkFormEl.innerHTML = '';
+      submitAllBtn.disabled = true;
+      try {
+        const res = await fetch('/api/quiz/questions');
+        if (!res.ok) throw new Error('Failed to fetch questions');
+        const data = await res.json();
+        cachedQuestions = data;
+        renderQuestions(data);
+        renderBulkForm(data);
+        setStatus(`Loaded ${data.length} question${data.length === 1 ? '' : 's'}.`);
+        submitAllBtn.disabled = false;
+      } catch (err) {
+        console.error(err);
+        setStatus('Could not load questions.');
+      }
+    }
+
+    function renderQuestions(list) {
+      if (!list.length) {
+        questionsEl.textContent = 'No questions available.';
+        return;
+      }
+      questionsEl.innerHTML = list.map(q => `
+        <div class="card" style="margin:8px 0;">
+          <div><strong>${q.id}. ${q.question}</strong></div>
+          <div class="options">
+            ${q.options.map((opt, idx) => `<label><code>${idx}</code> ${opt}</label>`).join('')}
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function renderBulkForm(list) {
+      bulkFormEl.innerHTML = list.map(q => `
+        <div style="margin-bottom:12px;">
+          <div><strong>${q.id}. ${q.question}</strong></div>
+          ${q.options.map((opt, idx) => `
+            <label>
+              <input type="radio" name="q-${q.id}" value="${idx}" />
+              <code>${idx}</code> ${opt}
+            </label>
+          `).join('')}
+        </div>
+      `).join('');
+    }
+
+    document.getElementById('loadQuestions').addEventListener('click', loadQuestions);
+
+    document.getElementById('singleForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const questionId = parseInt(document.getElementById('singleQuestionId').value, 10);
+      const answer = parseInt(document.getElementById('singleAnswer').value, 10);
+      try {
+        const res = await fetch('/api/quiz/submit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ questionId, answer })
+        });
+        const data = await res.json();
+        document.getElementById('singleResult').textContent = JSON.stringify(data, null, 2);
+      } catch (err) {
+        document.getElementById('singleResult').textContent = 'Error submitting answer.';
+      }
+    });
+
+    submitAllBtn.addEventListener('click', async () => {
+      if (!cachedQuestions.length) return;
+      const answers = cachedQuestions.map(q => {
+        const selected = document.querySelector(`input[name="q-${q.id}"]:checked`);
+        return { questionId: q.id, answer: selected ? parseInt(selected.value, 10) : null };
+      });
+      try {
+        const res = await fetch('/api/quiz/submit-all', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ answers })
+        });
+        const data = await res.json();
+        document.getElementById('bulkResult').textContent = JSON.stringify(data, null, 2);
+      } catch (err) {
+        document.getElementById('bulkResult').textContent = 'Error submitting answers.';
+      }
+    });
+  </script>
+</body>
+</html>
+

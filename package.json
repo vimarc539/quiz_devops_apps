@@ -6,11 +6,12 @@
   "directories": {
     "test": "tests"
   },
-  "scripts": {
-    "start": "node src/app.js",
-    "dev": "nodemon src/app.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
+"scripts": {
+  "start": "node src/app.js",
+  "dev": "nodemon src/app.js",
+  "test": "jest --coverage --forceExit",
+  "test:watch": "jest --watch"
+},
   "repository": {
     "type": "git",
     "url": "git+https://github.com/vimarc539/quiz_devops_apps.git"
