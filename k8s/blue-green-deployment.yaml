@@ -1,0 +1,167 @@
+---
+# Blue Deployment (Current/Stable Version)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: quiz-app-blue
+  namespace: default
+  labels:
+    app: quiz-app
+    version: blue
+    track: stable
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: quiz-app
+      version: blue
+  template:
+    metadata:
+      labels:
+        app: quiz-app
+        version: blue
+        track: stable
+    spec:
+      containers:
+      - name: quiz-app
+        image: DOCKER_USERNAME/quiz-app:1.0.0  # Current stable version
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 3000
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: PORT
+          value: "3000"
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+        livenessProbe:
+          httpGet:
+            path: /api/quiz/health
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /api/quiz/health
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+
+---
+# Green Deployment (New Version - Testing)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: quiz-app-green
+  namespace: default
+  labels:
+    app: quiz-app
+    version: green
+    track: canary
+spec:
+  replicas: 1  # Start with fewer replicas for testing
+  selector:
+    matchLabels:
+      app: quiz-app
+      version: green
+  template:
+    metadata:
+      labels:
+        app: quiz-app
+        version: green
+        track: canary
+    spec:
+      containers:
+      - name: quiz-app
+        image: DOCKER_USERNAME/quiz-app:1.1.0  # New version to test
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 3000
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: PORT
+          value: "3000"
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+        livenessProbe:
+          httpGet:
+            path: /api/quiz/health
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /api/quiz/health
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+
+---
+# Service pointing to Blue (Stable)
+apiVersion: v1
+kind: Service
+metadata:
+  name: quiz-app-blue-service
+  namespace: default
+  labels:
+    app: quiz-app
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 3000
+    protocol: TCP
+  selector:
+    app: quiz-app
+    version: blue  # Points to blue deployment
+
+---
+# Service pointing to Green (Canary/New)
+apiVersion: v1
+kind: Service
+metadata:
+  name: quiz-app-green-service
+  namespace: default
+  labels:
+    app: quiz-app
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 3000
+    protocol: TCP
+  selector:
+    app: quiz-app
+    version: green  # Points to green deployment
+
+---
+# Main Service - Switch between blue and green
+apiVersion: v1
+kind: Service
+metadata:
+  name: quiz-app-service
+  namespace: default
+  labels:
+    app: quiz-app
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 3000
+    protocol: TCP
+  selector:
+    app: quiz-app
+    version: blue  # Default to blue, change to green to switch
+

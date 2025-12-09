@@ -218,7 +218,129 @@ jobs:
     if: always()
     
     steps:
-    - name: Send status notification
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Determine pipeline status
+      id: status
+      run: |
+        STATUS_LINT="${{ needs.lint.result }}"
+        STATUS_TEST="${{ needs.test.result }}"
+        STATUS_BUILD="${{ needs.build.result }}"
+        STATUS_SECURITY="${{ needs.security-scan.result }}"
+        STATUS_DOCKER_BUILD="${{ needs.docker-build.result }}"
+        STATUS_DOCKER_TEST="${{ needs.docker-test.result }}"
+        
+        if [ "$STATUS_LINT" == "success" ] && [ "$STATUS_TEST" == "success" ] && [ "$STATUS_BUILD" == "success" ] && [ "$STATUS_DOCKER_BUILD" == "success" ] && [ "$STATUS_DOCKER_TEST" == "success" ]; then
+          echo "pipeline_status=success" >> $GITHUB_OUTPUT
+          echo "status_emoji=✅" >> $GITHUB_OUTPUT
+          echo "status_text=PASSED" >> $GITHUB_OUTPUT
+          echo "status_color=good" >> $GITHUB_OUTPUT
+        else
+          echo "pipeline_status=failure" >> $GITHUB_OUTPUT
+          echo "status_emoji=❌" >> $GITHUB_OUTPUT
+          echo "status_text=FAILED" >> $GITHUB_OUTPUT
+          echo "status_color=danger" >> $GITHUB_OUTPUT
+        fi
+        
+        # Create job status summary
+        JOB_STATUS="*Lint:* $STATUS_LINT\n*Test:* $STATUS_TEST\n*Build:* $STATUS_BUILD\n*Security:* $STATUS_SECURITY\n*Docker Build:* $STATUS_DOCKER_BUILD\n*Docker Test:* $STATUS_DOCKER_TEST"
+        echo "job_status<<EOF" >> $GITHUB_OUTPUT
+        echo "$JOB_STATUS" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
+    - name: Get commit info
+      id: commit
+      run: |
+        COMMIT_MSG=$(git log -1 --pretty=format:"%s")
+        COMMIT_AUTHOR=$(git log -1 --pretty=format:"%an")
+        COMMIT_SHA_SHORT=$(git rev-parse --short HEAD)
+        
+        echo "commit_msg=$COMMIT_MSG" >> $GITHUB_OUTPUT
+        echo "commit_author=$COMMIT_AUTHOR" >> $GITHUB_OUTPUT
+        echo "commit_sha_short=$COMMIT_SHA_SHORT" >> $GITHUB_OUTPUT
+
+    - name: Send Slack notification
+      uses: slackapi/slack-github-action@v1
+      with:
+        webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+        payload: |
+          {
+            "blocks": [
+              {
+                "type": "header",
+                "text": {
+                  "type": "plain_text",
+                  "text": "${{ steps.status.outputs.status_emoji }} CI Pipeline ${{ steps.status.outputs.status_text }}",
+                  "emoji": true
+                }
+              },
+              {
+                "type": "section",
+                "fields": [
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Repository:*\n${{ github.repository }}"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Branch:*\n${{ github.ref_name }}"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Commit:*\n<${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|${{ steps.commit.outputs.commit_sha_short }}>"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Author:*\n${{ steps.commit.outputs.commit_author }}"
+                  }
+                ]
+              },
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "*Commit Message:*\n${{ steps.commit.outputs.commit_msg }}"
+                }
+              },
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "*Job Status:*\n${{ steps.status.outputs.job_status }}"
+                }
+              },
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "*Workflow Run:*\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Details>"
+                }
+              },
+              {
+                "type": "divider"
+              },
+              {
+                "type": "context",
+                "elements": [
+                  {
+                    "type": "mrkdwn",
+                    "text": "Triggered by ${{ github.event_name }} • ${{ github.workflow }}"
+                  }
+                ]
+              }
+            ],
+            "attachments": [
+              {
+                "color": "${{ steps.status.outputs.status_color }}",
+                "footer": "GitHub Actions",
+                "footer_icon": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
+              }
+            ]
+          }
+      if: always()
+
+    - name: Send status notification (fallback)
       run: |
         STATUS_LINT="${{ needs.lint.result }}"
         STATUS_TEST="${{ needs.test.result }}"

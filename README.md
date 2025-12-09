@@ -80,6 +80,13 @@ The project includes automated CI/CD pipelines:
 - Docker image building and publishing
 - GitHub Release creation with release notes
 
+### CD Pipeline (`deploy.yml`)
+- Automated deployment to Kubernetes
+- Rolling updates with zero downtime
+- Supports staging and production environments
+- Health checks and verification
+- Horizontal Pod Autoscaling (HPA)
+
 ## Release Process
 
 See [RELEASE.md](./RELEASE.md) for detailed release documentation.
@@ -98,6 +105,44 @@ See [RELEASE.md](./RELEASE.md) for detailed release documentation.
    git push origin v1.0.0
    ```
 
+## Deployment
+
+The application can be deployed to Kubernetes using automated CD pipeline or manual deployment.
+
+### Automated Deployment (CD Pipeline)
+
+The CD pipeline (`deploy.yml`) automatically deploys when:
+- Code is pushed to `main` branch → Production deployment
+- Git tag is pushed → Deploys tagged version
+- Manual workflow dispatch → Choose environment and version
+
+**Prerequisites:**
+- Kubernetes cluster configured
+- GitHub Secret: `KUBECONFIG` (base64-encoded kubeconfig)
+
+**Deploy:**
+```bash
+# Automatic: Push to main branch
+git push origin main
+
+# Manual: Actions → CD Pipeline → Run workflow
+```
+
+### Manual Deployment
+
+```bash
+# Update image in k8s/deployment.yaml
+sed -i 's/DOCKER_USERNAME/YOUR_DOCKER_USERNAME/g' k8s/deployment.yaml
+
+# Deploy to Kubernetes
+kubectl apply -f k8s/
+
+# Verify deployment
+kubectl get pods -l app=quiz-app
+```
+
+See [DEPLOYMENT.md](./DEPLOYMENT.md) for detailed deployment guide.
+
 ## Project Structure
 
 ```
@@ -105,7 +150,15 @@ quiz_devops_apps/
 ├── .github/
 │   └── workflows/
 │       ├── ci.yml          # CI pipeline
-│       └── release.yml      # Release pipeline
+│       ├── release.yml     # Release pipeline
+│       └── deploy.yml      # CD pipeline
+├── k8s/                    # Kubernetes manifests
+│   ├── deployment.yaml     # Deployment with resource requirements
+│   ├── service.yaml        # Service for load balancing
+│   ├── configmap.yaml      # Configuration
+│   ├── hpa.yaml            # Horizontal Pod Autoscaler
+│   ├── ingress.yaml        # Ingress (optional)
+│   └── blue-green-deployment.yaml  # Blue-green deployment
 ├── src/
 │   ├── app.js              # Express app entry point
 │   ├── routes/
@@ -115,7 +168,8 @@ quiz_devops_apps/
 ├── tests/                  # Test files
 ├── Dockerfile              # Docker image definition
 ├── package.json            # Dependencies and scripts
-└── RELEASE.md             # Release documentation
+├── RELEASE.md             # Release documentation
+└── DEPLOYMENT.md          # Deployment documentation
 ```
 
 ## Versioning
@@ -142,8 +196,10 @@ Docker images are published to Docker Hub with multiple tags:
 
 - Node.js 18+
 - Docker (for containerization)
+- Kubernetes cluster (v1.20+) for deployment
 - GitHub Actions (for CI/CD)
 - Docker Hub account (for image publishing)
+- kubectl configured and connected to cluster
 
 ## GitHub Secrets
 
@@ -151,6 +207,40 @@ Configure the following secrets in your GitHub repository:
 
 - `DOCKER_USERNAME` - Docker Hub username
 - `DOCKER_PASSWORD` - Docker Hub access token or password
+- `KUBECONFIG` - Base64-encoded kubeconfig file (for CD pipeline)
+- `SLACK_WEBHOOK_URL` - Slack webhook URL for CI notifications (optional)
+
+### Setting up Slack Notifications
+
+1. **Create a Slack Incoming Webhook:**
+   - Go to https://api.slack.com/apps
+   - Create a new app or select existing app
+   - Go to "Incoming Webhooks" and activate it
+   - Click "Add New Webhook to Workspace"
+   - Select the channel where you want notifications
+   - Copy the webhook URL
+
+2. **Add to GitHub Secrets:**
+   - Go to your repository → Settings → Secrets and variables → Actions
+   - Click "New repository secret"
+   - Name: `SLACK_WEBHOOK_URL`
+   - Value: Paste your Slack webhook URL
+   - Click "Add secret"
+
+3. **Notifications will be sent:**
+   - On CI pipeline completion (success or failure)
+   - Includes job status, commit info, and workflow link
+
+## Resource Requirements
+
+**Per Pod:**
+- CPU: 100m request / 500m limit
+- Memory: 128 MiB request / 512 MiB limit
+- Replicas: 3 minimum, up to 10 (auto-scaled)
+
+**Deployment Strategy:**
+- Rolling Updates (default) - Zero downtime
+- Blue-Green Deployment (optional) - For testing
 
 ## License
 

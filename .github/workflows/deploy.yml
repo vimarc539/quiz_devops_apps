@@ -1,0 +1,190 @@
+name: CD Pipeline - Deploy to Kubernetes
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      image_tag:
+        description: 'Docker image tag to deploy'
+        required: false
+        type: string
+
+env:
+  DOCKER_IMAGE: ${{ secrets.DOCKER_USERNAME }}/quiz-app
+  KUBERNETES_NAMESPACE: default
+
+jobs:
+  prepare-deployment:
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.image.outputs.tag }}
+      environment: ${{ steps.env.outputs.environment }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Determine environment
+      id: env
+      run: |
+        if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          ENV="${{ github.event.inputs.environment }}"
+        elif [ "${{ github.ref }}" == "refs/heads/main" ]; then
+          ENV="production"
+        else
+          ENV="staging"
+        fi
+        echo "environment=${ENV}" >> $GITHUB_OUTPUT
+        echo "🌍 Deployment environment: ${ENV}"
+
+    - name: Extract version
+      id: version
+      run: |
+        if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "${{ github.event.inputs.image_tag }}" ]; then
+          VERSION="${{ github.event.inputs.image_tag }}"
+        elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+          VERSION="${GITHUB_REF#refs/tags/v}"
+        else
+          VERSION=$(node -p "require('./package.json').version")
+        fi
+        echo "version=${VERSION}" >> $GITHUB_OUTPUT
+        echo "📦 Version: ${VERSION}"
+
+    - name: Determine image tag
+      id: image
+      run: |
+        if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "${{ github.event.inputs.image_tag }}" ]; then
+          TAG="${{ github.event.inputs.image_tag }}"
+        elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+          TAG="${GITHUB_REF#refs/tags/}"
+        elif [ "${{ github.ref }}" == "refs/heads/main" ]; then
+          TAG="latest"
+        else
+          TAG="main-${GITHUB_SHA::7}"
+        fi
+        echo "tag=${TAG}" >> $GITHUB_OUTPUT
+        echo "🏷️  Image tag: ${TAG}"
+
+  deploy-to-kubernetes:
+    runs-on: ubuntu-latest
+    needs: prepare-deployment
+    environment:
+      name: ${{ needs.prepare-deployment.outputs.environment }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'latest'
+
+    - name: Configure kubectl
+      run: |
+        mkdir -p $HOME/.kube
+        echo "${{ secrets.KUBECONFIG }}" | base64 -d > $HOME/.kube/config
+        kubectl config set-context --current --namespace=${{ env.KUBERNETES_NAMESPACE }}
+        kubectl version --client
+
+    - name: Verify cluster connection
+      run: |
+        kubectl cluster-info
+        kubectl get nodes
+
+    - name: Update Kubernetes manifests
+      run: |
+        # Replace Docker image placeholder in deployment.yaml
+        sed -i "s|DOCKER_USERNAME|${{ secrets.DOCKER_USERNAME }}|g" k8s/deployment.yaml
+        sed -i "s|:latest|:${{ needs.prepare-deployment.outputs.image_tag }}|g" k8s/deployment.yaml
+        
+        # Update version in deployment labels
+        sed -i "s|version: \"1.0.0\"|version: \"${{ needs.prepare-deployment.outputs.version }}\"|g" k8s/deployment.yaml
+        
+        # Update ConfigMap version
+        sed -i "s|app.version: \"1.0.0\"|app.version: \"${{ needs.prepare-deployment.outputs.version }}\"|g" k8s/configmap.yaml
+        
+        echo "✅ Kubernetes manifests updated"
+
+    - name: Apply ConfigMap
+      run: |
+        kubectl apply -f k8s/configmap.yaml
+        kubectl get configmap quiz-app-config -o yaml
+
+    - name: Deploy to Kubernetes (Rolling Update)
+      run: |
+        echo "🚀 Deploying application to Kubernetes..."
+        kubectl apply -f k8s/deployment.yaml
+        
+        echo "⏳ Waiting for deployment to rollout..."
+        kubectl rollout status deployment/quiz-app --timeout=5m
+        
+        echo "✅ Deployment successful!"
+
+    - name: Apply Service
+      run: |
+        kubectl apply -f k8s/service.yaml
+        kubectl get service quiz-app-service
+
+    - name: Apply HorizontalPodAutoscaler
+      run: |
+        kubectl apply -f k8s/hpa.yaml
+        kubectl get hpa quiz-app-hpa
+
+    - name: Verify deployment
+      run: |
+        echo "📊 Deployment Status:"
+        kubectl get deployments
+        kubectl get pods -l app=quiz-app
+        kubectl get services
+        kubectl get hpa
+        
+        echo ""
+        echo "🔍 Pod Details:"
+        kubectl describe pods -l app=quiz-app | grep -A 10 "Name:\|Status:\|Image:\|Resources:"
+
+    - name: Health check
+      run: |
+        echo "🏥 Performing health check..."
+        # Get service endpoint
+        if [ "${{ needs.prepare-deployment.outputs.environment }}" == "production" ]; then
+          # Wait for LoadBalancer to get external IP
+          sleep 30
+          EXTERNAL_IP=$(kubectl get service quiz-app-service -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          if [ -n "$EXTERNAL_IP" ]; then
+            echo "🌐 External IP: ${EXTERNAL_IP}"
+            curl -f http://${EXTERNAL_IP}/api/quiz/health || echo "Health check endpoint not accessible yet"
+          fi
+        fi
+        
+        # Check pod health
+        kubectl get pods -l app=quiz-app -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\n"}{end}'
+
+  notify-deployment:
+    runs-on: ubuntu-latest
+    needs: [prepare-deployment, deploy-to-kubernetes]
+    if: always()
+    steps:
+    - name: Deployment notification
+      run: |
+        if [ "${{ needs.deploy-to-kubernetes.result }}" == "success" ]; then
+          echo "✅ Deployment to ${{ needs.prepare-deployment.outputs.environment }} completed successfully!"
+          echo "📦 Image: ${{ env.DOCKER_IMAGE }}:${{ needs.prepare-deployment.outputs.image_tag }}"
+          echo "🔢 Version: ${{ needs.prepare-deployment.outputs.version }}"
+          echo "🌍 Environment: ${{ needs.prepare-deployment.outputs.environment }}"
+        else
+          echo "❌ Deployment failed!"
+          exit 1
+        fi
+

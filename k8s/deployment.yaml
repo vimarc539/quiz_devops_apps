@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: quiz-app
+  namespace: default
+  labels:
+    app: quiz-app
+    version: "1.0.0"
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0  # Ensure zero downtime during updates
+  selector:
+    matchLabels:
+      app: quiz-app
+  template:
+    metadata:
+      labels:
+        app: quiz-app
+        version: "1.0.0"
+    spec:
+      containers:
+      - name: quiz-app
+        image: DOCKER_USERNAME/quiz-app:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 3000
+          name: http
+          protocol: TCP
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: PORT
+          value: "3000"
+        - name: APP_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: quiz-app-config
+              key: app.version
+        resources:
+          requests:
+            cpu: "100m"      # 0.1 CPU cores - minimum guaranteed
+            memory: "128Mi"   # 128 MB RAM - minimum guaranteed
+          limits:
+            cpu: "500m"       # 0.5 CPU cores - maximum allowed
+            memory: "512Mi"   # 512 MB RAM - maximum allowed
+        livenessProbe:
+          httpGet:
+            path: /api/quiz/health
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /api/quiz/health
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /api/quiz/health
+            port: 3000
+          initialDelaySeconds: 0
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 12  # Allow up to 60 seconds for startup
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+

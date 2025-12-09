@@ -1,0 +1,29 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: quiz-app-ingress
+  namespace: default
+  labels:
+    app: quiz-app
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"  # Optional: for TLS
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  rules:
+  - host: quiz-app.example.com  # Replace with your domain
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: quiz-app-service
+            port:
+              number: 80
+  # Uncomment for TLS support
+  # tls:
+  # - hosts:
+  #   - quiz-app.example.com
+  #   secretName: quiz-app-tls
+
