@@ -16,6 +16,10 @@ on:
         default: true
         type: boolean
 
+permissions:
+  contents: write  # Required for creating releases and tags
+  packages: write  # Required for pushing Docker images
+
 env:
   DOCKER_IMAGE: ${{ secrets.DOCKER_USERNAME }}/quiz-app
   REGISTRY: docker.io
@@ -31,6 +35,7 @@ jobs:
       uses: actions/checkout@v4
       with:
         fetch-depth: 0  # Fetch all history for tags
+        token: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Extract version
       id: version
@@ -54,20 +59,31 @@ jobs:
         echo "📦 Release version: ${VERSION}"
         echo "🏷️  Git tag: ${TAG}"
 
+    - name: Set up Node.js
+      if: github.event_name == 'workflow_dispatch'
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+
     - name: Update package.json version
       if: github.event_name == 'workflow_dispatch'
       run: |
-        npm version ${{ steps.version.outputs.version }} --no-git-tag-version
+        npm version ${{ steps.version.outputs.version }} --no-git-tag-version || echo "Version already set"
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
         git add package.json
-        git commit -m "chore: bump version to ${{ steps.version.outputs.version }}" || echo "No changes to commit"
+        git diff --staged --quiet || git commit -m "chore: bump version to ${{ steps.version.outputs.version }}"
 
     - name: Create Git tag
       if: github.event_name == 'workflow_dispatch' && github.event.inputs.tag_version == 'true'
       run: |
-        git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.tag }}"
-        git push origin "${{ steps.version.outputs.tag }}"
+        # Check if tag already exists
+        if git rev-parse "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
+          echo "Tag ${{ steps.version.outputs.tag }} already exists, skipping"
+        else
+          git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.tag }}"
+          git push origin "${{ steps.version.outputs.tag }}"
+        fi
 
   build-and-push:
     runs-on: ubuntu-latest
@@ -98,6 +114,7 @@ jobs:
           type=sha,format=short
 
     - name: Build and push Docker image
+      id: build
       uses: docker/build-push-action@v5
       with:
         context: .
@@ -109,11 +126,17 @@ jobs:
         cache-to: type=gha,mode=max
         build-args: |
           VERSION=${{ needs.prepare-release.outputs.version }}
-          BUILD_DATE=${{ github.event.head_commit.timestamp }}
+          BUILD_DATE=${{ github.event.head_commit.timestamp || github.run_started_at }}
           GIT_COMMIT=${{ github.sha }}
 
     - name: Image digest
-      run: echo "Image pushed with digest: ${{ steps.build.outputs.digest }}"
+      run: |
+        if [ -n "${{ steps.build.outputs.digest }}" ]; then
+          echo "✅ Image pushed with digest: ${{ steps.build.outputs.digest }}"
+        else
+          echo "⚠️  Image digest not available"
+        fi
+        echo "📦 Image tags: ${{ steps.meta.outputs.tags }}"
 
   create-github-release:
     runs-on: ubuntu-latest
@@ -127,11 +150,23 @@ jobs:
     - name: Generate release notes
       id: release-notes
       run: |
-        PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+        # Get the current tag
+        CURRENT_TAG="${{ needs.prepare-release.outputs.tag }}"
+        
+        # Try to find previous tag
+        PREVIOUS_TAG=$(git describe --tags --abbrev=0 ${CURRENT_TAG}^ 2>/dev/null || git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+        
         if [ -z "$PREVIOUS_TAG" ]; then
-          CHANGELOG=$(git log --pretty=format:"- %s (%h)" HEAD)
+          # No previous tag, get all commits
+          CHANGELOG=$(git log --pretty=format:"- %s (%h)" --no-merges HEAD)
         else
-          CHANGELOG=$(git log --pretty=format:"- %s (%h)" ${PREVIOUS_TAG}..HEAD)
+          # Get commits since previous tag
+          CHANGELOG=$(git log --pretty=format:"- %s (%h)" --no-merges ${PREVIOUS_TAG}..HEAD)
+        fi
+        
+        # If changelog is empty, use a default message
+        if [ -z "$CHANGELOG" ]; then
+          CHANGELOG="- Initial release"
         fi
         
         NOTES=$(cat <<EOF
