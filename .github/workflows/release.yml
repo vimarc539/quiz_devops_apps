@@ -1,0 +1,188 @@
+name: Release Pipeline
+
+on:
+  push:
+    tags:
+      - 'v*'  # Triggers on semantic version tags (e.g., v1.0.0, v1.0.1, v2.0.0)
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., 1.0.0)'
+        required: true
+        type: string
+      tag_version:
+        description: 'Create Git tag?'
+        required: false
+        default: true
+        type: boolean
+
+env:
+  DOCKER_IMAGE: ${{ secrets.DOCKER_USERNAME }}/quiz-app
+  REGISTRY: docker.io
+
+jobs:
+  prepare-release:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Fetch all history for tags
+
+    - name: Extract version
+      id: version
+      run: |
+        if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          VERSION="${{ github.event.inputs.version }}"
+        else
+          # Extract version from tag (remove 'v' prefix)
+          VERSION="${GITHUB_REF#refs/tags/v}"
+        fi
+        
+        # Validate version format (semantic versioning)
+        if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9]+)?$ ]]; then
+          echo "Error: Invalid version format. Use semantic versioning (e.g., 1.0.0)"
+          exit 1
+        fi
+        
+        TAG="v${VERSION}"
+        echo "version=${VERSION}" >> $GITHUB_OUTPUT
+        echo "tag=${TAG}" >> $GITHUB_OUTPUT
+        echo "📦 Release version: ${VERSION}"
+        echo "🏷️  Git tag: ${TAG}"
+
+    - name: Update package.json version
+      if: github.event_name == 'workflow_dispatch'
+      run: |
+        npm version ${{ steps.version.outputs.version }} --no-git-tag-version
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git add package.json
+        git commit -m "chore: bump version to ${{ steps.version.outputs.version }}" || echo "No changes to commit"
+
+    - name: Create Git tag
+      if: github.event_name == 'workflow_dispatch' && github.event.inputs.tag_version == 'true'
+      run: |
+        git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.tag }}"
+        git push origin "${{ steps.version.outputs.tag }}"
+
+  build-and-push:
+    runs-on: ubuntu-latest
+    needs: prepare-release
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.DOCKER_IMAGE }}
+        tags: |
+          type=raw,value=${{ needs.prepare-release.outputs.version }}
+          type=raw,value=${{ needs.prepare-release.outputs.tag }}
+          type=raw,value=latest
+          type=sha,prefix={{branch}}-
+          type=sha,format=short
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        build-args: |
+          VERSION=${{ needs.prepare-release.outputs.version }}
+          BUILD_DATE=${{ github.event.head_commit.timestamp }}
+          GIT_COMMIT=${{ github.sha }}
+
+    - name: Image digest
+      run: echo "Image pushed with digest: ${{ steps.build.outputs.digest }}"
+
+  create-github-release:
+    runs-on: ubuntu-latest
+    needs: [prepare-release, build-and-push]
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Generate release notes
+      id: release-notes
+      run: |
+        PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+        if [ -z "$PREVIOUS_TAG" ]; then
+          CHANGELOG=$(git log --pretty=format:"- %s (%h)" HEAD)
+        else
+          CHANGELOG=$(git log --pretty=format:"- %s (%h)" ${PREVIOUS_TAG}..HEAD)
+        fi
+        
+        NOTES=$(cat <<EOF
+        ## Release ${{ needs.prepare-release.outputs.tag }}
+        
+        ### Docker Image
+        \`\`\`
+        docker pull ${{ env.DOCKER_IMAGE }}:${{ needs.prepare-release.outputs.version }}
+        docker pull ${{ env.DOCKER_IMAGE }}:${{ needs.prepare-release.outputs.tag }}
+        docker pull ${{ env.DOCKER_IMAGE }}:latest
+        \`\`\`
+        
+        ### Changes
+        ${CHANGELOG}
+        
+        ### Run the application
+        \`\`\`bash
+        docker run -d -p 3000:3000 --name quiz-app ${{ env.DOCKER_IMAGE }}:${{ needs.prepare-release.outputs.version }}
+        \`\`\`
+        EOF
+        )
+        
+        echo "$NOTES" > release-notes.md
+        echo "notes<<EOF" >> $GITHUB_OUTPUT
+        echo "$NOTES" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ needs.prepare-release.outputs.tag }}
+        name: Release ${{ needs.prepare-release.outputs.tag }}
+        body_path: release-notes.md
+        draft: false
+        prerelease: ${{ contains(needs.prepare-release.outputs.version, '-') }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  notify-release:
+    runs-on: ubuntu-latest
+    needs: [prepare-release, build-and-push, create-github-release]
+    if: always()
+    steps:
+    - name: Release notification
+      run: |
+        if [ "${{ needs.build-and-push.result }}" == "success" ] && [ "${{ needs.create-github-release.result }}" == "success" ]; then
+          echo "✅ Release ${{ needs.prepare-release.outputs.tag }} completed successfully!"
+          echo "📦 Docker image: ${{ env.DOCKER_IMAGE }}:${{ needs.prepare-release.outputs.version }}"
+          echo "🏷️  Git tag: ${{ needs.prepare-release.outputs.tag }}"
+        else
+          echo "❌ Release failed!"
+          exit 1
+        fi
+
